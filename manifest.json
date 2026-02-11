@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "SBL Librarian",
+  "version": "1.0.0",
+  "description": "Extract book details and generate SBL-formatted citations with glassmorphic UI",
+  "permissions": ["clipboardWrite"],
+  "content_scripts": [
+    {
+      "matches": ["*://ebookcentral.proquest.com/*"],
+      "js": ["citation-formatter.js", "content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+}
