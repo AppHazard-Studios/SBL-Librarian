@@ -32,7 +32,7 @@ No more manually typing citations. Just click and paste.
 
 ## 📦 Installation
 
-1. [Download the latest `.zip` release from GitHub](https://github.com/YourUsername/SBL-Librarian/releases) *(coming soon)*
+1. [Download the latest `.zip` release from GitHub](https://github.com/AppHazard-Studios/SBL-Librarian/releases) *(coming soon)*
 2. **Unzip** the file to extract the extension folder
 3. Open your browser's **Extensions** page (`chrome://extensions/`)
 4. **Enable Developer Mode** (toggle in top right)
@@ -103,7 +103,7 @@ This extension simply reads book information already on the ProQuest page and fo
 
 ## 📩 Support
 
-For questions, feedback, or bugs, contact **[your email]** or open an issue on GitHub.
+For questions, feedback, or bugs, contact **apphazardstudios@gmail.com** or open an issue on GitHub.
 
 ---
 
