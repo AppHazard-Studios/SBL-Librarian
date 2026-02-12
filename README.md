@@ -63,13 +63,13 @@ No more manually typing citations. Just click and paste.
 ## 📋 Citation Formats
 
 ### First Footnote (full citation)
-John R. W. Stott, *The Message of Romans*, BST (Downers Grove: IVP, 1994), 23–25.
+John Stott, *The Message of Acts*, The Bible Speaks Today New Testament Series (Downers Grove: Inter-Varsity Press, 2020), 54–56.
 
 ### Later Footnote (shortened)
-Stott, *Message of Romans*, 23.
+Stott, *Message of Romans*, 54–56.
 
 ### Bibliography
-Stott, John R. W. *The Message of Romans*. BST. Downers Grove: IVP, 1994.
+Stott, John. *The Message of Acts*. The Bible Speaks Today New Testament Series. Downers Grove: Inter-Varsity Press, 2020.
 
 ---
 
@@ -87,8 +87,8 @@ This extension simply reads book information already on the ProQuest page and fo
 ## 🧪 Planned Features
 
 - **PDF book support** — currently works with EPUB/web readers
-- **Export citations library** — save all cited books as `.txt` or `.json`
 - **Custom series abbreviations** — add your own preferred abbreviations
+  **Publisher location fetching** — Not available currently on ProQuest
 
 ---
 
