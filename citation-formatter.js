@@ -25,7 +25,21 @@ const SERIES_ABBREVIATIONS = {
 
 function formatCitations(data) {
     const cleanedTitle = cleanTitle(data.title, data.series);
-    const authorParts = parseAuthorName(data.author);
+
+    // Handle author vs editor
+    let authorString = data.author;
+    let useEditor = false;
+
+    if (!authorString && data.editor) {
+        authorString = data.editor;
+        useEditor = true;
+    }
+
+    const authorParts = parseAuthorName(authorString, useEditor);
+
+    // Detect volume in title for multivolume works
+    const volumeInfo = extractVolumeFromTitle(cleanedTitle);
+
     const shortTitle = generateShortTitle(cleanedTitle);
     const seriesStr = formatSeries(data.series);
 
@@ -35,7 +49,7 @@ function formatCitations(data) {
     }
 
     const firstFootnote = buildFirstFootnote(cleanedTitle, data, authorParts, seriesStr);
-    const laterFootnote = buildLaterFootnote(authorParts, shortTitle);
+    const laterFootnote = buildLaterFootnote(authorParts, shortTitle, volumeInfo);
     const bibliography = buildBibliography(cleanedTitle, data, authorParts, seriesStr);
 
     return { firstFootnote, laterFootnote, bibliography };
@@ -69,36 +83,121 @@ function escapeRegex(string) {
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function parseAuthorName(authorString) {
-    if (!authorString) return { full: '', last: '', firstLast: '' };
+function extractVolumeFromTitle(title) {
+    if (!title) return null;
 
-    // Clean up extra whitespace
-    authorString = authorString.trim().replace(/\s+/g, ' ');
+    // Pattern to detect volume info in title
+    // Matches: "vol. 1", "Vol. 1", "Volume 1", "volume 1"
+    // Can be followed by comma, colon, period, or space
+    const volumePattern = /\b(?:vol\.?|volume)\s*(\d+)/i;
+    const match = title.match(volumePattern);
 
-    // Split by spaces
-    const parts = authorString.split(/\s+/);
-
-    if (parts.length === 0) {
-        return { full: '', last: '', firstLast: '' };
-    }
-
-    if (parts.length === 1) {
-        // Single name (unusual but handle it)
+    if (match) {
         return {
-            full: parts[0],
-            last: parts[0],
-            firstLast: parts[0]
+            hasVolume: true,
+            number: match[1] // Just the number (e.g., "1", "2", "3")
         };
     }
 
-    // Standard case: FirstName(s) LastName
+    return null;
+}
+
+function parseAuthorName(authorString, isEditor = false) {
+    if (!authorString) return { full: '', last: '', firstLast: '', count: 0 };
+
+    // Clean up HTML artifacts and whitespace
+    authorString = authorString
+        .replace(/<br\s*\/?>/gi, ' ')
+        .replace(/\s+and\s+/gi, ' and ')
+        .trim()
+        .replace(/\s+/g, ' ');
+
+    // Split authors by " and "
+    const authors = authorString.split(' and ').map(a => a.trim()).filter(a => a);
+
+    if (authors.length === 0) {
+        return { full: '', last: '', firstLast: '', count: 0 };
+    }
+
+    const count = authors.length;
+
+    // SBL Rules for footnotes/citations:
+    // 1 author: Full name
+    // 2 authors: Both full names with "and"
+    // 3+ authors: First author et al.
+
+    if (count === 1) {
+        const parts = authors[0].split(/\s+/);
+        if (parts.length === 1) {
+            const suffix = isEditor ? ', ed.' : '';
+            return {
+                full: parts[0] + suffix,
+                last: parts[0],
+                firstLast: parts[0] + suffix,
+                count: 1
+            };
+        }
+
+        const lastName = parts[parts.length - 1];
+        const firstName = parts.slice(0, -1).join(' ');
+        const suffix = isEditor ? ', ed.' : '';
+
+        return {
+            full: authors[0] + suffix,
+            last: lastName,
+            firstLast: `${lastName}, ${firstName}` + suffix,
+            count: 1
+        };
+    }
+
+    if (count === 2) {
+        // Parse both names
+        const author1Parts = authors[0].split(/\s+/);
+        const author2Parts = authors[1].split(/\s+/);
+
+        const lastName1 = author1Parts[author1Parts.length - 1];
+        const firstName1 = author1Parts.slice(0, -1).join(' ');
+
+        const lastName2 = author2Parts[author2Parts.length - 1];
+        const firstName2 = author2Parts.slice(0, -1).join(' ');
+
+        const suffix = isEditor ? ', eds.' : '';
+
+        return {
+            full: `${authors[0]} and ${authors[1]}` + suffix,
+            last: lastName1, // First author's last name for later footnotes
+            firstLast: `${lastName1}, ${firstName1}, and ${firstName2} ${lastName2}` + suffix,
+            count: 2
+        };
+    }
+
+    // 3+ authors: et al. in footnotes
+    const firstAuthor = authors[0];
+    const parts = firstAuthor.split(/\s+/);
     const lastName = parts[parts.length - 1];
     const firstName = parts.slice(0, -1).join(' ');
 
+    const suffix = isEditor ? ', eds.' : '';
+
+    // For bibliography (firstLast), we need ALL authors spelled out
+    const allAuthorsForBib = authors.map((author, idx) => {
+        const authorParts = author.split(/\s+/);
+        const last = authorParts[authorParts.length - 1];
+        const first = authorParts.slice(0, -1).join(' ');
+
+        if (idx === 0) {
+            return `${last}, ${first}`;
+        } else {
+            return `${first} ${last}`;
+        }
+    }).join(', ');
+
     return {
-        full: authorString,
+        full: `${firstAuthor} et al.` + suffix,
         last: lastName,
-        firstLast: `${lastName}, ${firstName}`
+        firstLast: allAuthorsForBib + suffix,
+        count: count,
+        allAuthors: authors // Store for potential future use
     };
 }
 
@@ -162,11 +261,21 @@ function buildFirstFootnote(title, data, author, series) {
     return { html, plain };
 }
 
-function buildLaterFootnote(author, shortTitle) {
-    const html = `${author.last}, <em>${shortTitle}</em>, xx.`;
-    const plain = `${author.last}, *${shortTitle}*, xx.`;
+function buildLaterFootnote(author, shortTitle, volumeInfo) {
+    // SBL format for multivolume works: Author, Short Title, volume:page
+    // Otherwise: Author, Short Title, page
 
-    return { html, plain };
+    if (volumeInfo && volumeInfo.hasVolume) {
+        // Use volume:page format (e.g., "1:xx" or "1:xx–xx")
+        const html = `${author.last}, <em>${shortTitle}</em>, ${volumeInfo.number}:xx.`;
+        const plain = `${author.last}, *${shortTitle}*, ${volumeInfo.number}:xx.`;
+        return { html, plain };
+    } else {
+        // Standard format without volume
+        const html = `${author.last}, <em>${shortTitle}</em>, xx.`;
+        const plain = `${author.last}, *${shortTitle}*, xx.`;
+        return { html, plain };
+    }
 }
 
 function buildBibliography(title, data, author, series) {

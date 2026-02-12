@@ -21,6 +21,42 @@ function extractDocID() {
 const CACHE_PREFIX = 'sbl_book_';
 const CACHE_DURATION = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
 
+// Publisher to Location mapping (common theological publishers)
+const PUBLISHER_LOCATIONS = {
+    'Baker Academic': 'Grand Rapids',
+    'Baker Books': 'Grand Rapids',
+    'Eerdmans': 'Grand Rapids',
+    'Wm. B. Eerdmans': 'Grand Rapids',
+    'William B. Eerdmans': 'Grand Rapids',
+    'Zondervan': 'Grand Rapids',
+    'Zondervan Academic': 'Grand Rapids',
+    'IVP': 'Downers Grove',
+    'IVP Academic': 'Downers Grove',
+    'InterVarsity Press': 'Downers Grove',
+    'Crossway': 'Wheaton',
+    'Tyndale House': 'Carol Stream',
+    'Moody Publishers': 'Chicago',
+    'B&H Academic': 'Nashville',
+    'Broadman & Holman': 'Nashville',
+    'Thomas Nelson': 'Nashville',
+    'Lexham Press': 'Bellingham',
+    'Hendrickson': 'Peabody',
+    'Hendrickson Publishers': 'Peabody',
+    'Westminster John Knox': 'Louisville',
+    'Westminster John Knox Press': 'Louisville',
+    'Oxford University Press': 'Oxford',
+    'Cambridge University Press': 'Cambridge',
+    'Yale University Press': 'New Haven',
+    'Fortress Press': 'Minneapolis',
+    'Augsburg Fortress': 'Minneapolis',
+    'T&T Clark': 'London',
+    'Bloomsbury': 'London',
+    'SPCK': 'London',
+    'Paternoster': 'London',
+    'Apollos': 'Nottingham',
+    'New City Press': 'Hyde Park'
+};
+
 function getCachedBookData(docID) {
     const key = CACHE_PREFIX + docID;
     const cached = localStorage.getItem(key);
@@ -121,10 +157,20 @@ function parseBookDetailsFromHTML(doc) {
     };
 
     data.title = getField('Title');
+    const subtitle = getField('Subtitle');
+
+    // Combine title + subtitle for full title (SBL standard)
+    if (subtitle) {
+        data.title = data.title + ': ' + subtitle;
+    }
+
     data.series = getField('Series');
     data.edition = getField('Edition');
-    data.author = getField('Author');
-    data.editor = getField('Editor');
+
+    // Try both singular and plural
+    data.author = getField('Author') || getField('Authors');
+    data.editor = getField('Editor') || getField('Editors');
+
     data.publisher = getField('Publisher');
     data.printDate = getField('Print Pub Date');
     data.ebookDate = getField('Ebook Pub Date');
@@ -138,7 +184,8 @@ function parseBookDetailsFromHTML(doc) {
         data.ebookDate = '';
     }
 
-    data.place = 'Place';
+    // Auto-fill place from publisher lookup, fallback to 'Place'
+    data.place = PUBLISHER_LOCATIONS[data.publisher] || 'Place';
 
     return data;
 }
@@ -151,7 +198,7 @@ function initDetailView() {
     const bookData = extractBookDetails();
     if (!bookData.title) return;
 
-    // Save to localStorage with docID
+    // ALWAYS save to localStorage on detail page (keeps cache fresh after extension updates)
     const docID = extractDocID();
     if (docID) {
         setCachedBookData(docID, bookData);
@@ -273,17 +320,44 @@ function updatePageInputs(pageData) {
     }
 }
 
-function extractReaderBookData() {
-    const title = document.title.split(' | ')[0] || 'Book Title';
+function parseBookDetailsFromHTML(doc) {
+    const data = {};
 
-    return {
-        title: title,
-        author: 'Author Name',
-        publisher: 'Publisher',
-        year: 'Year',
-        place: 'Place',
-        series: ''
+    const getField = (labelText) => {
+        const labels = doc.querySelectorAll('.bib-label h6');
+        for (let label of labels) {
+            if (label.textContent.trim() === labelText) {
+                const fieldDiv = label.parentElement.nextElementSibling;
+                return fieldDiv ? fieldDiv.textContent.trim() : '';
+            }
+        }
+        return '';
     };
+
+    data.title = getField('Title');
+    data.series = getField('Series');
+    data.edition = getField('Edition');
+
+    // Try both singular and plural
+    data.author = getField('Author') || getField('Authors');
+    data.editor = getField('Editor') || getField('Editors');
+
+    data.publisher = getField('Publisher');
+    data.printDate = getField('Print Pub Date');
+    data.ebookDate = getField('Ebook Pub Date');
+
+    if (data.printDate) {
+        const yearMatch = data.printDate.match(/^(\d{4})/);
+        data.year = yearMatch ? yearMatch[1] : '';
+    }
+
+    if (data.ebookDate === 'N/A') {
+        data.ebookDate = '';
+    }
+
+    data.place = 'Place';
+
+    return data;
 }
 
 function extractBookDetails() {
@@ -301,10 +375,20 @@ function extractBookDetails() {
     };
 
     data.title = getField('Title');
+    const subtitle = getField('Subtitle');
+
+    // Combine title + subtitle for full title (SBL standard)
+    if (subtitle) {
+        data.title = data.title + ': ' + subtitle;
+    }
+
     data.series = getField('Series');
     data.edition = getField('Edition');
-    data.author = getField('Author');
-    data.editor = getField('Editor');
+
+    // Try both singular and plural for authors/editors
+    data.author = getField('Author') || getField('Authors');
+    data.editor = getField('Editor') || getField('Editors');
+
     data.publisher = getField('Publisher');
     data.printDate = getField('Print Pub Date');
     data.ebookDate = getField('Ebook Pub Date');
@@ -318,7 +402,8 @@ function extractBookDetails() {
         data.ebookDate = '';
     }
 
-    data.place = 'Place';
+    // Auto-fill place from publisher lookup, fallback to 'Place'
+    data.place = PUBLISHER_LOCATIONS[data.publisher] || 'Place';
 
     return data;
 }
@@ -438,6 +523,102 @@ function destroyPanel() {
     if (fab) fab.remove();
 }
 
+async function refreshCitations(currentBookData) {
+    const docID = extractDocID();
+    if (!docID) {
+        console.error('No docID found');
+        return;
+    }
+
+    // Clear cache for this book
+    const cacheKey = CACHE_PREFIX + docID;
+    localStorage.removeItem(cacheKey);
+
+    // Show loading state on refresh button
+    const refreshBtn = document.querySelector('.sbl-refresh-btn');
+    const originalHtml = refreshBtn ? refreshBtn.innerHTML : '';
+    if (refreshBtn) {
+        refreshBtn.innerHTML = '⏳';
+        refreshBtn.disabled = true;
+        refreshBtn.style.opacity = '0.5';
+    }
+
+    // Add minimum delay so user sees the refresh happening
+    const startTime = Date.now();
+
+    let newBookData;
+
+    // Check if we're on detail page (can extract directly) or reader page (need to fetch)
+    const isDetailPage = document.getElementById('bib-container');
+
+    if (isDetailPage) {
+        // On detail page - extract fresh data
+        newBookData = extractBookDetails();
+    } else {
+        // On reader page - fetch from detail page
+        newBookData = await fetchBookDataFromDetail(docID);
+
+        if (!newBookData) {
+            // Fallback to current data if fetch fails
+            newBookData = currentBookData;
+        }
+    }
+
+    // Ensure at least 500ms has passed so user sees the loading state
+    const elapsed = Date.now() - startTime;
+    if (elapsed < 500) {
+        await new Promise(resolve => setTimeout(resolve, 500 - elapsed));
+    }
+
+    // Save fresh data to cache
+    setCachedBookData(docID, newBookData);
+
+    // Regenerate citations
+    const newCitations = formatCitations(newBookData);
+
+    // Update panel dataset
+    const panel = document.getElementById('sbl-panel');
+    if (panel) {
+        panel.dataset.bookData = JSON.stringify(newBookData);
+        panel.dataset.baseCitations = JSON.stringify(newCitations);
+    }
+
+    // Update citation cards
+    const firstCard = document.querySelector('[data-card-id="first"]');
+    if (firstCard) {
+        firstCard.querySelector('.sbl-citation-text').innerHTML = newCitations.firstFootnote.html;
+        firstCard.dataset.plainText = newCitations.firstFootnote.plain;
+        firstCard.dataset.htmlText = newCitations.firstFootnote.html;
+    }
+
+    const laterCard = document.querySelector('[data-card-id="later"]');
+    if (laterCard) {
+        laterCard.querySelector('.sbl-citation-text').innerHTML = newCitations.laterFootnote.html;
+        laterCard.dataset.plainText = newCitations.laterFootnote.plain;
+        laterCard.dataset.htmlText = newCitations.laterFootnote.html;
+    }
+
+    const bibCard = document.querySelector('[data-card-id="bib"]');
+    if (bibCard) {
+        bibCard.querySelector('.sbl-citation-text').innerHTML = newCitations.bibliography.html;
+        bibCard.dataset.plainText = newCitations.bibliography.plain;
+        bibCard.dataset.htmlText = newCitations.bibliography.html;
+    }
+
+    // Restore refresh button
+    if (refreshBtn) {
+        refreshBtn.innerHTML = originalHtml;
+        refreshBtn.disabled = false;
+        refreshBtn.style.opacity = '';
+    }
+
+    // Trigger page update if there are current page values
+    const startInput = document.getElementById('sbl-page-start');
+    if (startInput && startInput.value) {
+        startInput.dispatchEvent(new Event('input'));
+    }
+}
+
 function createFloatingPanel(citations, bookData, currentPage, showFAB) {
     // Create backdrop
     const backdrop = document.createElement('div');
@@ -473,7 +654,7 @@ function createFloatingPanel(citations, bookData, currentPage, showFAB) {
     cardsContainer.className = 'sbl-panel-content';
 
     // Page controls
-    const pageControls = createPageControls(currentPage);
+    const pageControls = createPageControls(currentPage, bookData);
     cardsContainer.appendChild(pageControls);
 
     // Citation cards
@@ -488,10 +669,23 @@ function createFloatingPanel(citations, bookData, currentPage, showFAB) {
         cardsContainer.appendChild(cardEl);
     });
 
-    // Footer
+    // Footer with refresh button
     const footer = document.createElement('div');
     footer.className = 'sbl-panel-footer';
-    footer.textContent = 'SBL Librarian';
+
+    const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'sbl-refresh-btn';
+    refreshBtn.innerHTML = '↻';
+    refreshBtn.title = 'Refresh Citations';
+    refreshBtn.addEventListener('click', async () => {
+        await refreshCitations(bookData);
+    });
+
+    const footerText = document.createElement('span');
+    footerText.textContent = 'SBL Librarian';
+
+    footer.appendChild(refreshBtn);
+    footer.appendChild(footerText);
 
     panel.appendChild(cardsContainer);
     panel.appendChild(footer);
@@ -513,28 +707,51 @@ function createFloatingPanel(citations, bookData, currentPage, showFAB) {
     }
 }
 
-function createPageControls(currentPage) {
+function createPageControls(currentPage, bookData) {
     const container = document.createElement('div');
     container.className = 'sbl-page-controls';
 
-    const label = document.createElement('div');
-    label.className = 'sbl-page-label';
-    label.textContent = 'Page Range';
+    // Page Range section
+    const pageLabel = document.createElement('div');
+    pageLabel.className = 'sbl-page-label';
+    pageLabel.textContent = 'Page Range';
 
-    const inputContainer = document.createElement('div');
-    inputContainer.className = 'sbl-page-inputs';
+    const pageInputContainer = document.createElement('div');
+    pageInputContainer.className = 'sbl-page-inputs';
 
     const startPage = currentPage ? currentPage.start : '';
     const endPage = currentPage ? currentPage.end : '';
 
-    inputContainer.innerHTML = `
+    pageInputContainer.innerHTML = `
     <input type="text" id="sbl-page-start" class="sbl-page-input" value="${startPage}" placeholder="xx">
     <span class="sbl-page-separator">–</span>
     <input type="text" id="sbl-page-end" class="sbl-page-input" value="${endPage}" placeholder="xx">
   `;
 
-    container.appendChild(label);
-    container.appendChild(inputContainer);
+    container.appendChild(pageLabel);
+    container.appendChild(pageInputContainer);
+
+    // Location section
+    const locationLabel = document.createElement('div');
+    locationLabel.className = 'sbl-page-label';
+    locationLabel.textContent = 'Publication Location';
+    locationLabel.style.marginTop = '12px';
+
+    const locationInputContainer = document.createElement('div');
+    locationInputContainer.className = 'sbl-location-input'; // Different class for full-width styling
+
+    // Auto-fill location from publisher lookup
+    let defaultLocation = '';
+    if (bookData && bookData.publisher) {
+        defaultLocation = PUBLISHER_LOCATIONS[bookData.publisher] || '';
+    }
+
+    locationInputContainer.innerHTML = `
+    <input type="text" id="sbl-location" class="sbl-page-input sbl-location-field" value="${defaultLocation}" placeholder="Place">
+  `;
+
+    container.appendChild(locationLabel);
+    container.appendChild(locationInputContainer);
 
     return container;
 }
@@ -542,15 +759,17 @@ function createPageControls(currentPage) {
 function setupPageHandlers() {
     const startInput = document.getElementById('sbl-page-start');
     const endInput = document.getElementById('sbl-page-end');
+    const locationInput = document.getElementById('sbl-location');
 
     if (!startInput || !endInput) return;
 
     const updateCitations = () => {
         const start = startInput.value.trim();
         const end = endInput.value.trim();
+        const location = locationInput ? locationInput.value.trim() : '';
 
+        // Calculate page range
         let pageRange;
-
         if ((!start || start.toLowerCase() === 'xx') && (!end || end.toLowerCase() === 'xx')) {
             pageRange = 'xx–xx';
         }
@@ -568,28 +787,31 @@ function setupPageHandlers() {
             }
         }
 
-        // Update first footnote
+        // Get book data and regenerate with updated location
+        const panel = document.getElementById('sbl-panel');
+        const bookData = JSON.parse(panel.dataset.bookData);
+
+        // Update place if user entered a location
+        if (location) {
+            bookData.place = location;
+        }
+
+        const citations = formatCitations(bookData);
+
+        // Update first footnote (has both page and place)
         const firstCard = document.querySelector('[data-card-id="first"]');
         if (firstCard) {
-            const panel = document.getElementById('sbl-panel');
-            const bookData = JSON.parse(panel.dataset.bookData);
-            const citations = formatCitations(bookData);
-
-            const updatedHtml = citations.firstFootnote.html.replace(/xx–xx/, pageRange);
-            const updatedPlain = citations.firstFootnote.plain.replace(/xx–xx/, pageRange);
+            let updatedHtml = citations.firstFootnote.html.replace(/xx–xx/, pageRange);
+            let updatedPlain = citations.firstFootnote.plain.replace(/xx–xx/, pageRange);
 
             firstCard.querySelector('.sbl-citation-text').innerHTML = updatedHtml;
             firstCard.dataset.plainText = updatedPlain;
             firstCard.dataset.htmlText = updatedHtml;
         }
 
-        // Update later footnote
+        // Update later footnote (has page only)
         const laterCard = document.querySelector('[data-card-id="later"]');
         if (laterCard) {
-            const panel = document.getElementById('sbl-panel');
-            const bookData = JSON.parse(panel.dataset.bookData);
-            const citations = formatCitations(bookData);
-
             const updatedHtml = citations.laterFootnote.html.replace(/xx/, pageRange);
             const updatedPlain = citations.laterFootnote.plain.replace(/xx/, pageRange);
 
@@ -597,10 +819,21 @@ function setupPageHandlers() {
             laterCard.dataset.plainText = updatedPlain;
             laterCard.dataset.htmlText = updatedHtml;
         }
+
+        // Update bibliography (has place)
+        const bibCard = document.querySelector('[data-card-id="bib"]');
+        if (bibCard) {
+            bibCard.querySelector('.sbl-citation-text').innerHTML = citations.bibliography.html;
+            bibCard.dataset.plainText = citations.bibliography.plain;
+            bibCard.dataset.htmlText = citations.bibliography.html;
+        }
     };
 
     startInput.addEventListener('input', updateCitations);
     endInput.addEventListener('input', updateCitations);
+    if (locationInput) {
+        locationInput.addEventListener('input', updateCitations);
+    }
 }
 
 function createCitationCard(label, content, cardId) {
