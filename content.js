@@ -1,5 +1,7 @@
 // Detect view type
 function initSBLLibrarian() {
+    cleanOldCache();
+
     const isReaderView = window.location.href.includes('reader.action');
 
     if (isReaderView) {
@@ -7,6 +9,138 @@ function initSBLLibrarian() {
     } else {
         initDetailView();
     }
+}
+
+// Extract docID from URL
+function extractDocID() {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('docID');
+}
+
+// Cache management
+const CACHE_PREFIX = 'sbl_book_';
+const CACHE_DURATION = 30 * 24 * 60 * 60 * 1000; // 30 days in milliseconds
+
+function getCachedBookData(docID) {
+    const key = CACHE_PREFIX + docID;
+    const cached = localStorage.getItem(key);
+
+    if (!cached) return null;
+
+    try {
+        const data = JSON.parse(cached);
+        const age = Date.now() - data.timestamp;
+
+        if (age > CACHE_DURATION) {
+            localStorage.removeItem(key);
+            return null;
+        }
+
+        return data.bookData;
+    } catch (e) {
+        console.error('Cache parse error:', e);
+        localStorage.removeItem(key);
+        return null;
+    }
+}
+
+function setCachedBookData(docID, bookData) {
+    const key = CACHE_PREFIX + docID;
+    const cacheEntry = {
+        bookData: bookData,
+        timestamp: Date.now()
+    };
+
+    try {
+        localStorage.setItem(key, JSON.stringify(cacheEntry));
+    } catch (e) {
+        console.error('Cache save error:', e);
+    }
+}
+
+function cleanOldCache() {
+    const now = Date.now();
+    const keysToRemove = [];
+
+    for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+
+        if (!key || !key.startsWith(CACHE_PREFIX)) continue;
+
+        try {
+            const data = JSON.parse(localStorage.getItem(key));
+            const age = now - data.timestamp;
+
+            if (age > CACHE_DURATION) {
+                keysToRemove.push(key);
+            }
+        } catch (e) {
+            keysToRemove.push(key);
+        }
+    }
+
+    keysToRemove.forEach(key => localStorage.removeItem(key));
+}
+
+// Fetch book data from detail page
+async function fetchBookDataFromDetail(docID) {
+    // Extract library path from current URL (e.g., "/lib/ridley/")
+    const currentPath = window.location.pathname;
+    const libMatch = currentPath.match(/\/lib\/[^\/]+\//);
+    const libPath = libMatch ? libMatch[0] : '/lib/rid/'; // Fallback to rid
+
+    const detailUrl = `https://ebookcentral.proquest.com${libPath}detail.action?docID=${docID}`;
+
+    try {
+        const response = await fetch(detailUrl);
+        if (!response.ok) throw new Error('Fetch failed');
+
+        const html = await response.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+
+        return parseBookDetailsFromHTML(doc);
+    } catch (e) {
+        console.error('Failed to fetch book data:', e);
+        return null;
+    }
+}
+
+function parseBookDetailsFromHTML(doc) {
+    const data = {};
+
+    const getField = (labelText) => {
+        const labels = doc.querySelectorAll('.bib-label h6');
+        for (let label of labels) {
+            if (label.textContent.trim() === labelText) {
+                const fieldDiv = label.parentElement.nextElementSibling;
+                return fieldDiv ? fieldDiv.textContent.trim() : '';
+            }
+        }
+        return '';
+    };
+
+    data.title = getField('Title');
+    data.series = getField('Series');
+    data.edition = getField('Edition');
+    data.author = getField('Author');
+    data.editor = getField('Editor');
+    data.publisher = getField('Publisher');
+    data.printDate = getField('Print Pub Date');
+    data.ebookDate = getField('Ebook Pub Date');
+
+    if (data.printDate) {
+        const yearMatch = data.printDate.match(/^(\d{4})/);
+        data.year = yearMatch ? yearMatch[1] : '';
+    }
+
+    if (data.ebookDate === 'N/A') {
+        data.ebookDate = '';
+    }
+
+    data.place = 'Place';
+
+    return data;
 }
 
 // Detail view
@@ -17,7 +151,11 @@ function initDetailView() {
     const bookData = extractBookDetails();
     if (!bookData.title) return;
 
-    sessionStorage.setItem('sbl_book_data', JSON.stringify(bookData));
+    // Save to localStorage with docID
+    const docID = extractDocID();
+    if (docID) {
+        setCachedBookData(docID, bookData);
+    }
 
     const citations = formatCitations(bookData);
 
@@ -30,27 +168,58 @@ function initDetailView() {
 }
 
 // Reader view
-function initReaderView() {
-    const checkReady = setInterval(() => {
+async function initReaderView() {
+    const checkReady = setInterval(async () => {
         const toolbar = document.querySelector('.controls.document-actions');
         const pageInfo = document.querySelector('.pageno-status');
 
         if (toolbar && pageInfo) {
             clearInterval(checkReady);
 
+            const docID = extractDocID();
             let bookData = null;
-            const stored = sessionStorage.getItem('sbl_book_data');
-            if (stored) {
-                bookData = JSON.parse(stored);
+
+            if (docID) {
+                // Try cache first
+                bookData = getCachedBookData(docID);
+
+                if (!bookData) {
+                    // Show loading state
+                    injectReaderToolbarButton(toolbar);
+                    createLoadingPanel();
+
+                    // Fetch from detail page
+                    bookData = await fetchBookDataFromDetail(docID);
+
+                    if (bookData) {
+                        setCachedBookData(docID, bookData);
+                    } else {
+                        // Fallback to basic reader data
+                        bookData = extractReaderBookData();
+                    }
+
+                    // Replace loading with actual panel
+                    destroyPanel();
+                    const citations = formatCitations(bookData);
+                    const currentPage = extractCurrentPage();
+                    createFloatingPanel(citations, bookData, currentPage, false);
+                } else {
+                    // Use cached data
+                    const citations = formatCitations(bookData);
+                    const currentPage = extractCurrentPage();
+
+                    injectReaderToolbarButton(toolbar);
+                    createFloatingPanel(citations, bookData, currentPage, false);
+                }
             } else {
+                // No docID - fallback
                 bookData = extractReaderBookData();
+                const citations = formatCitations(bookData);
+                const currentPage = extractCurrentPage();
+
+                injectReaderToolbarButton(toolbar);
+                createFloatingPanel(citations, bookData, currentPage, false);
             }
-
-            const citations = formatCitations(bookData);
-            const currentPage = extractCurrentPage();
-
-            injectReaderToolbarButton(toolbar);
-            createFloatingPanel(citations, bookData, currentPage, false);
 
             watchPageChanges();
         }
@@ -223,6 +392,52 @@ function injectReaderToolbarButton(toolbar) {
     }
 }
 
+function createLoadingPanel() {
+    // Create backdrop
+    const backdrop = document.createElement('div');
+    backdrop.id = 'sbl-backdrop';
+    backdrop.className = 'sbl-backdrop';
+    document.body.appendChild(backdrop);
+
+    // Create panel
+    const panel = document.createElement('div');
+    panel.id = 'sbl-panel';
+    panel.className = 'sbl-panel';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'sbl-floating-close';
+    closeBtn.innerHTML = '✕';
+    closeBtn.title = 'Close';
+    closeBtn.addEventListener('click', closePanel);
+    document.body.appendChild(closeBtn);
+
+    const content = document.createElement('div');
+    content.className = 'sbl-panel-content';
+
+    const loadingCard = document.createElement('div');
+    loadingCard.className = 'sbl-loading-card';
+    loadingCard.innerHTML = `
+        <div class="sbl-loading-text">Generating citations...</div>
+        <div class="sbl-loading-spinner">⏳</div>
+    `;
+
+    content.appendChild(loadingCard);
+    panel.appendChild(content);
+    document.body.appendChild(panel);
+}
+
+function destroyPanel() {
+    const panel = document.getElementById('sbl-panel');
+    const backdrop = document.getElementById('sbl-backdrop');
+    const closeBtn = document.querySelector('.sbl-floating-close');
+    const fab = document.getElementById('sbl-fab');
+
+    if (panel) panel.remove();
+    if (backdrop) backdrop.remove();
+    if (closeBtn) closeBtn.remove();
+    if (fab) fab.remove();
+}
+
 function createFloatingPanel(citations, bookData, currentPage, showFAB) {
     // Create backdrop
     const backdrop = document.createElement('div');
@@ -247,8 +462,6 @@ function createFloatingPanel(citations, bookData, currentPage, showFAB) {
     panel.id = 'sbl-panel';
     panel.className = 'sbl-panel';
 
-    // Floating close button (no header)
-    // Floating close button (outside panel)
     const closeBtn = document.createElement('button');
     closeBtn.className = 'sbl-floating-close';
     closeBtn.innerHTML = '✕';
@@ -289,7 +502,7 @@ function createFloatingPanel(citations, bookData, currentPage, showFAB) {
 
     setupPageHandlers();
 
-// Trigger initial update if pages are pre-filled
+    // Trigger initial update if pages are pre-filled
     if (currentPage) {
         setTimeout(() => {
             const startInput = document.getElementById('sbl-page-start');
@@ -311,7 +524,6 @@ function createPageControls(currentPage) {
     const inputContainer = document.createElement('div');
     inputContainer.className = 'sbl-page-inputs';
 
-    // Use actual values if available, otherwise empty (placeholder shows "xx")
     const startPage = currentPage ? currentPage.start : '';
     const endPage = currentPage ? currentPage.end : '';
 

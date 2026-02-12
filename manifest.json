@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "SBL Librarian",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Extract book details and generate SBL-formatted citations with Liquid Glass UI",
-  "permissions": ["clipboardWrite"],
+  "permissions": ["clipboardWrite", "storage"],
   "content_scripts": [
     {
       "matches": ["*://ebookcentral.proquest.com/*"],
